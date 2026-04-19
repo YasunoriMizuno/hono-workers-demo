@@ -1,0 +1,15 @@
+name = "hono-workers-demo"
+main = "src/index.ts"
+compatibility_date = "2025-04-01"
+compatibility_flags = ["nodejs_compat"]
+
+# KV Namespace の例 (使う場合はコメントを外す)
+# [[kv_namespaces]]
+# binding = "MY_KV"
+# id = "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "hono-api-db"
+database_id = "d6b33fea-21d1-4e9a-9e44-f38b5cbde8ce"
+
