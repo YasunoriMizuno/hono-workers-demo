@@ -4,92 +4,64 @@ import { logger } from 'hono/logger'
 import { prettyJSON } from 'hono/pretty-json'
 import { zValidator } from '@hono/zod-validator'
 import { z } from 'zod'
+import { drizzle } from 'drizzle-orm/d1'
+import { eq } from 'drizzle-orm'
+import { items } from './schema'
 
-type Bindings = {
-  DB: D1Database
-  API_KEY: string
-}
+type Bindings = { DB: D1Database; API_KEY: string }
 
 const app = new Hono<{ Bindings: Bindings }>()
 
 app.use('*', logger())
 app.use('*', prettyJSON())
-app.use('/api/*', cors({
-  origin: ['http://localhost:3000', 'https://your-frontend.pages.dev'],
-  allowMethods: ['GET', 'POST', 'PUT', 'DELETE'],
-}))
+app.use('/api/*', cors({ allowMethods: ['GET', 'POST', 'PUT', 'DELETE'] }))
 
-// GET /api/items — 一覧取得
 app.get('/api/items', async (c) => {
-  const { results } = await c.env.DB
-    .prepare('SELECT * FROM items ORDER BY id')
-    .all()
-  return c.json(results)
+  const db = drizzle(c.env.DB)
+  const list = await db.select().from(items)
+  return c.json(list)
 })
 
-// GET /api/items/:id — 1件取得
 app.get('/api/items/:id', async (c) => {
+  const db = drizzle(c.env.DB)
   const id = Number(c.req.param('id'))
-  const item = await c.env.DB
-    .prepare('SELECT * FROM items WHERE id = ?')
-    .bind(id)
-    .first()
-  if (!item) return c.json({ error: 'Not found' }, 404)
-  return c.json(item)
+  const rows = await db.select().from(items).where(eq(items.id, id))
+  if (!rows.length) return c.json({ error: 'Not found' }, 404)
+  return c.json(rows[0])
 })
 
-const createItemSchema = z.object({
-  name:  z.string().min(1, '名前は必須です').max(50),
-  price: z.number().int().positive('価格は正の整数で入力してください'),
+const schema = z.object({
+  name:  z.string().min(1),
+  price: z.number().int().positive(),
 })
 
-// POST /api/items — 新規作成
-app.post('/api/items', zValidator('json', createItemSchema), async (c) => {
-  const { name, price } = c.req.valid('json')
-  const result = await c.env.DB
-    .prepare('INSERT INTO items (name, price) VALUES (?, ?)')
-    .bind(name, price)
-    .run()
-  const newItem = await c.env.DB
-    .prepare('SELECT * FROM items WHERE id = ?')
-    .bind(result.meta.last_row_id)
-    .first()
-  return c.json(newItem, 201)
+app.post('/api/items', zValidator('json', schema), async (c) => {
+  const db = drizzle(c.env.DB)
+  const rows = await db.insert(items).values(c.req.valid('json')).returning()
+  return c.json(rows[0], 201)
 })
 
-// PUT /api/items/:id — 更新
-app.put('/api/items/:id', zValidator('json', createItemSchema.partial()), async (c) => {
+app.put('/api/items/:id', zValidator('json', schema.partial()), async (c) => {
+  const db = drizzle(c.env.DB)
   const id = Number(c.req.param('id'))
-  const updates = c.req.valid('json')
-  const sets = Object.keys(updates).map(k => `${k} = ?`).join(', ')
-  await c.env.DB
-    .prepare(`UPDATE items SET ${sets} WHERE id = ?`)
-    .bind(...Object.values(updates), id)
-    .run()
-  const item = await c.env.DB
-    .prepare('SELECT * FROM items WHERE id = ?')
-    .bind(id).first()
-  if (!item) return c.json({ error: 'Not found' }, 404)
-  return c.json(item)
+  const rows = await db.update(items)
+    .set(c.req.valid('json'))
+    .where(eq(items.id, id))
+    .returning()
+  if (!rows.length) return c.json({ error: 'Not found' }, 404)
+  return c.json(rows[0])
 })
 
-// DELETE /api/items/:id — 削除
 app.delete('/api/items/:id', async (c) => {
+  const db = drizzle(c.env.DB)
   const id = Number(c.req.param('id'))
-  await c.env.DB
-    .prepare('DELETE FROM items WHERE id = ?')
-    .bind(id)
-    .run()
+  await db.delete(items).where(eq(items.id, id))
   return c.body(null, 204)
 })
 
-app.onError((err, c) => {
-  console.error('Unhandled error:', err)
-  return c.json({ error: 'Internal Server Error', message: err.message }, 500)
-})
-
-app.notFound((c) => {
-  return c.json({ error: `Route ${c.req.path} not found` }, 404)
-})
+app.onError((err, c) =>
+  c.json({ error: 'Internal Server Error', message: err.message }, 500))
+app.notFound((c) =>
+  c.json({ error: `Route ${c.req.path} not found` }, 404))
 
 export default app
